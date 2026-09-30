@@ -1,0 +1,32 @@
+# Generated data: records, settings, uploaded audio
+data/
+uploads/
+
+# Transcripts and minutes of meeting (MoM)
+outputs/
+backup/
+*.srt
+*-minutes.md
+
+# Audio / video recordings
+*.mp3
+*.mp4
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.wav
+*.flac
+*.webm
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

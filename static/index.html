@@ -1,0 +1,2058 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio to Text</title>
+<script>
+  // Apply the theme before first paint to avoid a flash (a cache of the setting in data/db.json).
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  /* ---------- theme tokens: purple + black ---------- */
+  :root {
+    color-scheme: light;
+    --bg: #f5f3fb; --bg-glow: rgba(124, 58, 237, .10);
+    --card: #ffffff; --card-2: #faf8ff; --side: #fbfaff;
+    --text: #17131f; --muted: #6b6480; --border: #e6e0f2; --border-strong: #d5cbeb;
+    --accent: #7c3aed; --accent-2: #a855f7; --accent-soft: #f1eaff; --accent-text: #6d28d9;
+    --ok: #16a34a; --ok-soft: #e8f7ee; --err: #dc2626; --err-soft: #fdecec;
+    --shadow: 0 1px 2px rgba(23, 19, 31, .04), 0 10px 30px rgba(91, 33, 182, .07);
+    --track: #ece7f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #09080d; --bg-glow: rgba(139, 92, 246, .16);
+      --card: #13111a; --card-2: #0e0c14; --side: #0c0b11;
+      --text: #ece9f5; --muted: #968fab; --border: #241f31; --border-strong: #342d46;
+      --accent: #8b5cf6; --accent-2: #c084fc; --accent-soft: rgba(139, 92, 246, .14); --accent-text: #c4b5fd;
+      --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12); --err: #f87171; --err-soft: rgba(248, 113, 113, .12);
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .35);
+      --track: #1e1a29;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #09080d; --bg-glow: rgba(139, 92, 246, .16);
+    --card: #13111a; --card-2: #0e0c14; --side: #0c0b11;
+    --text: #ece9f5; --muted: #968fab; --border: #241f31; --border-strong: #342d46;
+    --accent: #8b5cf6; --accent-2: #c084fc; --accent-soft: rgba(139, 92, 246, .14); --accent-text: #c4b5fd;
+    --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .12); --err: #f87171; --err-soft: rgba(248, 113, 113, .12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .35);
+    --track: #1e1a29;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; color: var(--text); background: var(--bg);
+         background-image: radial-gradient(900px 500px at 100% -10%, var(--bg-glow), transparent 60%),
+                           radial-gradient(700px 400px at -10% 110%, var(--bg-glow), transparent 60%);
+         background-attachment: fixed;
+         font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         transition: background-color .25s, color .25s; }
+  .hidden { display: none !important; }
+  .hint { font-size: 12.5px; color: var(--muted); }
+  svg { flex: none; }
+  ::selection { background: var(--accent); color: #fff; }
+
+  /* ---------- layout ---------- */
+  .app { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100vh; }
+  aside { background: var(--side); border-right: 1px solid var(--border); display: flex;
+          flex-direction: column; min-height: 0; }
+  main { overflow-y: auto; padding: 24px 32px 48px; min-width: 0; }
+  .wrap { width: 100%; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+    aside { order: 2; border-right: 0; border-top: 1px solid var(--border); max-height: 60vh; }
+    main { overflow: visible; padding: 16px; }
+  }
+
+  /* ---------- sidebar ---------- */
+  .brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px 16px; }
+  .logo { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2));
+          box-shadow: 0 6px 18px rgba(124, 58, 237, .35); }
+  .brand b { font-size: 16px; letter-spacing: -.01em; display: block; }
+  .brand span { font-size: 12px; color: var(--muted); }
+  .side-head { padding: 6px 16px 10px; }
+  .side-head h2 { margin: 0 0 10px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em;
+                  color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+  #count { background: var(--accent-soft); color: var(--accent-text); border-radius: 99px;
+           padding: 1px 8px; font-size: 11px; letter-spacing: 0; }
+  #count:empty { display: none; }
+  .search { position: relative; }
+  .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+  #search { width: 100%; padding: 9px 10px 9px 32px; border-radius: 10px; border: 1px solid var(--border);
+            background: var(--card); color: var(--text); font: inherit; font-size: 14px; outline: none;
+            transition: border-color .15s, box-shadow .15s; }
+  #search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .side-new { padding: 0 16px 14px; }
+  .new-btn { width: 100%; justify-content: center; padding: 10px 16px; }
+  #records { list-style: none; margin: 0; padding: 4px 10px 14px; overflow-y: auto; flex: 1; }
+  #records li { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 10px;
+                cursor: pointer; margin-bottom: 2px; border: 1px solid transparent; transition: background .15s; }
+  #records li:hover { background: var(--accent-soft); }
+  #records li.selected { background: var(--accent-soft); border-color: var(--border-strong); }
+  #records .r-ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none;
+                   background: var(--card); border: 1px solid var(--border); color: var(--accent-text); }
+  #records .name { font-weight: 600; font-size: 13.5px; word-break: break-word; line-height: 1.35; }
+  #records .meta { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  #records .body { min-width: 0; }
+  .r-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mpill { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 3px 9px; font-size: 11.5px;
+           font-weight: 600; border-radius: 99px; border: 1px solid transparent; transition: filter .15s; }
+  .mpill.yes { background: var(--ok-soft); color: var(--ok); }
+  .mpill.no { background: transparent; color: var(--muted); border: 1px dashed var(--border-strong); }
+  .mpill.busy { background: var(--accent-soft); color: var(--accent-text); }
+  .mpill .t-spin { width: 10px; height: 10px; }
+  .mpill:hover { filter: brightness(1.12); }
+  #records .empty { cursor: default; color: var(--muted); font-size: 13px; justify-content: center; text-align: center; }
+  #records .empty:hover { background: none; }
+
+  /* ---------- header ---------- */
+  /* sticky so the tasks menu stays reachable while scrolling */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           position: sticky; top: -24px; z-index: 30; margin: -24px -32px 20px; padding: 16px 32px;
+           background: color-mix(in srgb, var(--bg) 80%, transparent);
+           backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  @media (max-width: 860px) { header { top: 0; margin: -16px -16px 16px; padding: 12px 16px; } }
+  h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
+  h1 em { font-style: normal; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+          -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border);
+              background: var(--card); color: var(--text); display: grid; place-items: center; cursor: pointer;
+              box-shadow: var(--shadow); transition: border-color .15s, transform .15s; padding: 0; }
+  .icon-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+  /* ---------- cards ---------- */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+          padding: 20px; margin-bottom: 18px; box-shadow: var(--shadow); }
+  .card-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+                color: var(--muted); margin: 0 0 12px; }
+
+  /* upload */
+  #drop { border: 1.5px dashed var(--border-strong); border-radius: 14px; padding: 22px; cursor: pointer;
+          display: flex; align-items: center; gap: 16px; background: var(--card-2);
+          transition: border-color .15s, background .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  #drop.has-file { border-style: solid; }
+  .drop-icon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
+               background: var(--accent-soft); color: var(--accent-text); }
+  #fileName { font-weight: 600; overflow-wrap: anywhere; }
+  #fileName strong { color: var(--accent-text); }
+  input[type=file] { display: none; }
+
+  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px;
+             margin-top: 18px; align-items: end; }
+  label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--muted); }
+  select, input[type=number] { width: 100%; height: 40px; padding: 0 10px; border-radius: 10px; font: inherit;
+          font-size: 14px; border: 1px solid var(--border); background: var(--card-2); color: var(--text);
+          outline: none; transition: border-color .15s, box-shadow .15s; }
+  select:focus, input[type=number]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* toggle switch */
+  .switch { display: flex; align-items: center; gap: 10px; height: 40px; margin: 0; cursor: pointer;
+            font-size: 13.5px; color: var(--text); font-weight: 500; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch .track { width: 38px; height: 22px; border-radius: 99px; background: var(--track); position: relative;
+                   transition: background .2s; border: 1px solid var(--border); }
+  .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                          border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .2s; }
+  .switch input:checked + .track { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: transparent; }
+  .switch input:checked + .track::after { transform: translateX(16px); }
+  .switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .head-btns { display: flex; gap: 8px; align-items: center; }
+
+  /* tasks menu */
+  .tasks-wrap { position: relative; }
+  .tasks-btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 12px;
+               border: 1px solid var(--border); background: var(--card); color: var(--text); box-shadow: var(--shadow);
+               font-size: 13.5px; transition: border-color .15s; }
+  .tasks-btn:hover, .tasks-btn[aria-expanded="true"] { border-color: var(--accent); }
+  .tasks-btn.busy { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+  .t-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent-soft);
+            border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  .tasks-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 90; width: min(430px, calc(100vw - 32px));
+               background: var(--card); border: 1px solid var(--border-strong); border-radius: 16px;
+               box-shadow: 0 24px 60px rgba(0, 0, 0, .35); animation: rise .15s ease-out; overflow: hidden; }
+  .tp-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px;
+             border-bottom: 1px solid var(--border); }
+  .tp-body { max-height: min(70vh, 560px); overflow-y: auto; padding: 6px 0; }
+  .tp-group { padding: 10px 16px 4px; font-size: 11px; font-weight: 800; text-transform: uppercase;
+              letter-spacing: .07em; color: var(--muted); }
+  .tp-empty { padding: 28px 20px; text-align: center; color: var(--muted); font-size: 13.5px; }
+  .task { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 10px 16px; align-items: start; }
+  .task + .task { border-top: 1px solid var(--border); }
+  .task .t-ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+                background: var(--accent-soft); color: var(--accent-text); }
+  .task.fin .t-ic { background: var(--track); color: var(--muted); }
+  .task .t-top { display: flex; align-items: center; gap: 8px; }
+  .task .t-title { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task .t-sub, .task .t-msg { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .task .t-msg { margin-top: 3px; }
+  .task .bar { height: 5px; margin-top: 7px; }
+  .task .t-act { display: flex; gap: 6px; }
+  .task .t-act button { padding: 6px 10px; font-size: 12px; }
+  .pill { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px; white-space: nowrap; flex: none;
+          background: var(--accent-soft); color: var(--accent-text); }
+  .pill.queued, .pill.cancelled { background: var(--track); color: var(--muted); }
+  .pill.done { background: var(--ok-soft); color: var(--ok); }
+  .pill.error { background: var(--err-soft); color: var(--err); }
+  .stop-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12.5px;
+              background: var(--err-soft); color: var(--err); border: 1px solid transparent; }
+  .stop-btn:hover:not(:disabled) { border-color: var(--err); }
+  .prog-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  [data-phase="done"] .stop-btn, [data-phase="error"] .stop-btn, [data-phase="cancelled"] .stop-btn { display: none; }
+  [data-phase="cancelled"] .phase { background: var(--track); color: var(--muted); }
+  [data-phase="cancelled"] .phase .dot { animation: none; }
+  [data-phase="cancelled"] .bar > div { background: var(--muted); }
+  [data-phase="cancelled"] .bar > div::after { display: none; }
+  @media (max-width: 560px) { #tasksLabel { display: none; } }
+  .chosen { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 99px;
+          background: var(--card); border: 1px solid var(--border); font-size: 13px; }
+  .linkish { background: none; padding: 4px 6px; color: var(--accent-text); font-size: 13px; text-decoration: underline;
+             text-underline-offset: 3px; }
+
+  /* ---------- settings section ---------- */
+  .icon-btn.active { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+  .set-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .set-title { font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+  #refreshModels svg { transition: transform .2s; }
+  #refreshModels.spin svg { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sysgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+  @container (max-width: 720px) { .sysgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .sysgrid .stat { background: var(--card); box-shadow: var(--shadow); padding: 14px 16px; }
+  .sysgrid .stat b { font-size: 18px; display: block; }
+  .sysgrid .stat span { font-size: 12px; color: var(--muted); }
+  .tabs { display: flex; gap: 6px; padding: 5px; background: var(--card); border: 1px solid var(--border);
+          border-radius: 14px; margin-bottom: 14px; width: fit-content; max-width: 100%; overflow-x: auto;
+          box-shadow: var(--shadow); }
+  .tab { background: none; color: var(--muted); padding: 9px 16px; font-size: 14px; border-radius: 10px;
+         display: inline-flex; align-items: center; gap: 8px; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                               box-shadow: 0 6px 16px rgba(124, 58, 237, .3); }
+  .tab .count { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); }
+  .tab[aria-selected="true"] .count { background: rgba(255, 255, 255, .22); }
+  .intro { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start;
+           margin-bottom: 16px; }
+  .intro p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
+  .intro code { font-size: 12px; background: var(--card-2); border: 1px solid var(--border); padding: 1px 5px;
+                border-radius: 6px; overflow-wrap: anywhere; }
+  .models { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .model { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--border);
+           border-radius: 14px; background: var(--card-2); transition: border-color .15s, background .15s; }
+  .model.sel { border-color: var(--accent); background: var(--accent-soft);
+               box-shadow: 0 0 0 1px var(--accent) inset; }
+  .m-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .model .t { font-weight: 800; font-size: 15px; overflow-wrap: anywhere; }
+  .model .id { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+  .model .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .model .good { margin: 0; font-size: 13.5px; }
+  .specs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+  .specs div { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 7px 9px; }
+  .specs dt { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .specs dd { margin: 2px 0 0; font-size: 13px; font-weight: 700; }
+  .fit-yes { color: var(--ok); } .fit-tight { color: #d97706; } .fit-no { color: var(--err); }
+  .m-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; flex-wrap: wrap; }
+  .in-use { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 700;
+            color: var(--accent-text); padding: 8px 4px; }
+  .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; white-space: nowrap; }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.no { background: var(--track); color: var(--muted); }
+  .badge.err { background: var(--err-soft); color: var(--err); }
+  .badge.dl { background: var(--accent-soft); color: var(--accent-text); }
+  .dl-msg { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+  .dl-msg.error { color: var(--err); }
+  .mini-bar { height: 6px; background: var(--track); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .mini-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .5s; }
+  .warn { padding: 10px 12px; border-radius: 10px; background: var(--err-soft); color: var(--err); font-size: 13px;
+          margin-bottom: 14px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* settings: panel sliding in from the right; the page behind is blurred */
+  .overlay { position: fixed; inset: 0; z-index: 100; background: rgba(9, 6, 18, .4);
+             backdrop-filter: blur(8px) saturate(120%); -webkit-backdrop-filter: blur(8px) saturate(120%);
+             animation: fadeIn .2s ease-out; }
+  .overlay.hidden { display: none; }
+  body.modal-open main, body.modal-open aside { overflow: hidden; }
+  .set-panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(1120px, 100vw); overflow-y: auto;
+               background: var(--bg); border-left: 1px solid var(--border-strong); padding: 0 22px 28px;
+               box-shadow: -30px 0 80px rgba(0, 0, 0, .4); animation: slideIn .28s cubic-bezier(.2, .8, .2, 1);
+               container-type: inline-size; }
+  @keyframes fadeIn { from { opacity: 0; } }
+  @keyframes slideIn { from { transform: translateX(100%); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px) scale(.99); } }
+  .set-panel .icon-btn { flex: none; }
+  .set-panel .set-head { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+                         flex-wrap: wrap; position: sticky; top: 0; z-index: 2; padding: 20px 0 16px;
+                         margin-bottom: 8px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+                         backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+                         border-bottom: 1px solid var(--border); }
+  @media (max-width: 640px) { .set-panel { padding: 0 14px 20px; } }
+  h4.sub { margin: 22px 0 12px; font-size: 12.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+           color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .intro + h4.sub { margin-top: 4px; }
+  h4.sub .count, #libCount { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--accent-soft);
+                             color: var(--accent-text); letter-spacing: 0; }
+  .lib-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+              margin-top: 26px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .lib-head h4.sub { margin-bottom: 0; }
+  .lib-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .lib-tools .search { width: 220px; }
+  #libSearch { width: 100%; padding: 8px 10px 8px 32px; border-radius: 10px; border: 1px solid var(--border);
+               background: var(--card-2); color: var(--text); font: inherit; font-size: 13.5px; outline: none; }
+  #libSearch:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fchip { padding: 6px 12px; font-size: 12.5px; border-radius: 99px; background: var(--card-2);
+           border: 1px solid var(--border); color: var(--muted); }
+  .fchip:hover { color: var(--text); }
+  .fchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+
+  .lib { margin-top: 14px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .lrow { display: grid; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border);
+          grid-template-columns: minmax(220px, 2.2fr) repeat(4, minmax(66px, .7fr)) minmax(100px, 1fr)
+                                 minmax(62px, .6fr) minmax(190px, 1.3fr); }
+  .lrow:first-child { border-top: 0; }
+  .lrow.lhead { background: var(--card-2); font-size: 11px; font-weight: 700; text-transform: uppercase;
+                letter-spacing: .05em; color: var(--muted); padding-top: 10px; padding-bottom: 10px; }
+  .lrow:not(.lhead):hover { background: var(--card-2); }
+  .lrow.sel { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
+  .lrow .l-name b { font-size: 14px; }
+  .lrow .l-name .id { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+  .lrow .l-good { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .lrow .l-tags { display: inline-flex; gap: 5px; flex-wrap: wrap; vertical-align: middle; margin-left: 6px; }
+  .lrow .l-spec { font-size: 13px; font-weight: 600; }
+  .lrow .l-spec small { display: none; }
+  .lrow .l-act { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .lrow .l-btns { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .lrow .l-act .ghost, .lrow .l-act .primary.small { padding: 6px 11px; font-size: 12.5px; }
+  .lrow .mini-bar { width: 100%; }
+  .lib-empty { padding: 28px; text-align: center; color: var(--muted); font-size: 14px; }
+  @container (max-width: 980px) {
+    .lrow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .lrow.lhead { display: none; }
+    .lrow .l-name, .lrow .l-act { grid-column: 1 / -1; }
+    .lrow .l-act { align-items: flex-start; }
+    .lrow .l-spec small { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+                          letter-spacing: .05em; color: var(--muted); }
+  }
+
+  .minutes-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center;
+                 margin-top: 14px; padding: 14px; border-radius: 12px; background: var(--accent-soft);
+                 border: 1px solid var(--border); }
+  @media (max-width: 640px) { .minutes-row { grid-template-columns: minmax(0, 1fr); } }
+  .primary.small { padding: 8px 14px; font-size: 13.5px; box-shadow: none; }
+  #transcript.prose { white-space: pre-wrap; font-size: 13.5px; line-height: 1.6; }
+  .form-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+               margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .privacy { display: flex; align-items: center; gap: 6px; }
+
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+  .primary { display: inline-flex; align-items: center; gap: 8px; padding: 11px 26px; color: #fff;
+             background: linear-gradient(135deg, var(--accent), var(--accent-2));
+             box-shadow: 0 8px 20px rgba(124, 58, 237, .30); transition: transform .15s, box-shadow .15s, opacity .15s; }
+  .primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(124, 58, 237, .40); }
+  .primary:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+  .ghost { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13.5px;
+           background: var(--accent-soft); color: var(--accent-text); text-decoration: none; transition: filter .15s; }
+  .ghost:hover { filter: brightness(1.08); }
+  a.ghost { font-weight: 600; border-radius: 10px; }
+  @media (max-width: 520px) { .primary { width: 100%; justify-content: center; } }
+
+  /* ---------- progress ---------- */
+  .prog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+  .phase { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+           text-transform: uppercase; letter-spacing: .06em; padding: 5px 10px; border-radius: 99px;
+           background: var(--accent-soft); color: var(--accent-text); }
+  .phase .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
+  [data-phase="done"] .phase { background: var(--ok-soft); color: var(--ok); }
+  [data-phase="error"] .phase { background: var(--err-soft); color: var(--err); }
+  [data-phase="done"] .phase .dot, [data-phase="error"] .phase .dot { animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  #statusText { margin-top: 8px; font-size: 14px; overflow-wrap: anywhere; }
+  [data-phase="error"] #statusText { color: var(--err); }
+  #pct { font-size: 34px; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1;
+         background: linear-gradient(135deg, var(--accent), var(--accent-2));
+         -webkit-background-clip: text; background-clip: text; color: transparent; }
+  [data-phase="done"] #pct { background: none; color: var(--ok); }
+
+  .bar { height: 10px; background: var(--track); border-radius: 99px; overflow: hidden; position: relative; }
+  .bar > div { height: 100%; width: 0; border-radius: 99px; position: relative; overflow: hidden;
+               background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .6s ease; }
+  .bar > div::after { content: ""; position: absolute; inset: 0;
+                      background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+                      animation: shimmer 1.6s infinite; }
+  [data-phase="done"] .bar > div { background: var(--ok); }
+  [data-phase="done"] .bar > div::after, [data-phase="error"] .bar > div::after { display: none; }
+  [data-phase="error"] .bar > div { background: var(--err); }
+  .bar.indeterminate > div { width: 30%; animation: slide 1.3s infinite ease-in-out; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stat { background: var(--card-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+  .stat small { display: block; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+                letter-spacing: .05em; }
+  .stat b { font-size: 17px; font-variant-numeric: tabular-nums; }
+
+  .next { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .ring { width: 16px; height: 16px; transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 3; }
+  .ring .bg { stroke: var(--track); }
+  .ring .fg { stroke: var(--accent); stroke-dasharray: 44; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+
+  .panes { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; margin-top: 16px; }
+  @media (max-width: 900px) { .panes { grid-template-columns: minmax(0, 1fr); } }
+  .pane-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px;
+                text-transform: uppercase; letter-spacing: .05em; }
+  .scroll { height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px;
+            padding: 8px 12px; font-size: 14px; background: var(--card-2); }
+  #transcript:empty::before { content: "Text will appear here as it is produced..."; color: var(--muted); }
+  .seg { padding: 3px 0; }
+  .seg time { color: var(--accent-text); font-variant-numeric: tabular-nums; margin-right: 8px; font-size: 12px;
+              font-weight: 600; opacity: .8; }
+  #log { list-style: none; margin: 0; padding: 4px 12px; }
+  #log li { display: grid; grid-template-columns: 44px 42px minmax(0, 1fr); gap: 8px; padding: 6px 0 6px 14px;
+            font-size: 13px; position: relative; border-left: 2px solid var(--border); }
+  #log li::before { content: ""; position: absolute; left: -5px; top: 12px; width: 8px; height: 8px;
+                    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--card-2); }
+  #log li:first-child::before { background: var(--accent-2); box-shadow: 0 0 0 3px var(--card-2), 0 0 10px var(--accent-2); }
+  #log time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #log .p { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent-text); }
+  #log .m { overflow-wrap: anywhere; }
+
+  /* ---------- viewer ---------- */
+  .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                 flex-wrap: wrap; margin-bottom: 12px; }
+  #viewerName { font-weight: 700; word-break: break-word; }
+  #viewerMeta { display: block; margin-top: 2px; }
+  .btns { display: flex; gap: 8px; }
+  #viewerText { width: 100%; min-height: 380px; resize: vertical; padding: 14px 16px; outline: none;
+                border: 1px solid var(--border); border-radius: 12px; background: var(--card-2);
+                color: var(--text); font: 13.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #viewerText:focus { border-color: var(--border-strong); }
+  #viewerText.editing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--card); }
+  .gen-panel { border: 1px solid var(--accent); border-radius: 14px; padding: 18px; margin-bottom: 16px;
+               background: linear-gradient(180deg, var(--accent-soft), transparent 140%); }
+  .gp-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+  .gp-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; color: var(--accent-text); }
+  .gp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .gp-grid .hint { margin-top: 5px; }
+  .gp-preview { overflow-wrap: anywhere; max-height: 3.2em; overflow: hidden; }
+  .gp-model { display: flex; align-items: center; gap: 6px; height: 40px; }
+  .gp-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }
+  .vtabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+  .vtab { background: none; color: var(--muted); padding: 10px 14px; border-radius: 0; font-size: 14px;
+          border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 8px; }
+  .vtab:hover:not(:disabled) { color: var(--text); }
+  .vtab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .st { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px; }
+  .st.yes { background: var(--ok-soft); color: var(--ok); }
+  .st.no { background: var(--track); color: var(--muted); }
+  .empty-state { text-align: center; padding: 48px 16px; border: 1.5px dashed var(--border-strong); border-radius: 14px;
+                 background: var(--card-2); }
+  .empty-state .ic { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
+                     margin: 0 auto 12px; background: var(--accent-soft); color: var(--accent-text); }
+  .empty-state h3 { margin: 0 0 6px; font-size: 17px; }
+  .empty-state p { margin: 0 auto 18px; color: var(--muted); max-width: 52ch; font-size: 14px; }
+
+  /* rendered minutes (markdown) */
+  .md { font-size: 14.5px; line-height: 1.65; overflow-wrap: anywhere; }
+  .md > :first-child { margin-top: 0; }
+  .md h1 { font-size: 23px; letter-spacing: -.01em; margin: 0 0 12px; }
+  .md h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 12.5px; font-weight: 800;
+           text-transform: uppercase; letter-spacing: .07em; color: var(--accent-text); }
+  .md h2::before { content: ""; width: 8px; height: 8px; border-radius: 2px; flex: none;
+                   background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .md h3, .md h4 { font-size: 15px; margin: 14px 0 6px; }
+  .md p { margin: 0 0 10px; }
+  .md-sec { background: var(--card-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+            border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
+  .md-sec > :last-child { margin-bottom: 0; }
+  .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
+  .md li { margin: 4px 0; }
+  .md li::marker { color: var(--accent); }
+  .md li.task { list-style: none; margin-left: -18px; }
+  .md .tbl { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; }
+  .md table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .md th, .md td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+  .md tr:last-child td { border-bottom: 0; }
+  .md th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--card); }
+  .md code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--accent-soft);
+             padding: 1px 5px; border-radius: 5px; }
+  .md pre { background: var(--card-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow-x: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { margin: 0 0 10px; padding: 4px 14px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+  .md hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
+  .md-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 1100px) { .md-edit { grid-template-columns: minmax(0, 1fr); } }
+  #mdEditor { width: 100%; min-height: 560px; resize: vertical; padding: 14px 16px; outline: none; border-radius: 12px;
+              border: 1px solid var(--accent); background: var(--card-2); color: var(--text);
+              box-shadow: 0 0 0 3px var(--accent-soft); font: 13.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #mdPreview { height: 560px; overflow-y: auto; border: 1px dashed var(--border-strong); border-radius: 12px; padding: 14px 18px; }
+
+  /* ---------- open record ---------- */
+  .rec-head .rh-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .rh-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .rh-title h2 { margin: 0; font-size: 21px; letter-spacing: -.01em; overflow-wrap: anywhere; cursor: text; }
+  .name-input { font: inherit; font-size: 19px; font-weight: 700; padding: 6px 10px; border-radius: 10px;
+                border: 1px solid var(--accent); background: var(--card-2); color: var(--text); outline: none;
+                box-shadow: 0 0 0 3px var(--accent-soft); width: min(520px, 70vw); }
+  .icon-sm { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; padding: 0;
+             background: var(--accent-soft); color: var(--accent-text); flex: none; }
+  .rename-err { color: var(--err); font-size: 13px; margin-top: 6px; }
+  #recMeta { margin-top: 6px; }
+  #recAudio { width: 100%; height: 40px; margin-top: 12px; }
+  .ghost.danger { background: var(--err-soft); color: var(--err); }
+  .name-row { margin-top: 14px; }
+  .text-input { width: 100%; height: 40px; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 14px;
+                border: 1px solid var(--border); background: var(--card-2); color: var(--text); outline: none; }
+  .text-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .prog-record { margin-left: 6px; font-weight: 600; }
+  .versions { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; margin-bottom: 8px; }
+  .vchip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; flex: none;
+           border-radius: 12px; background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+           font-size: 13.5px; text-align: left; max-width: 320px; }
+  .vchip:hover { border-color: var(--border-strong); }
+  .vchip.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .vchip small { font-size: 11.5px; color: var(--muted); font-weight: 500; white-space: normal; }
+  .vchip .latest { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 99px; margin-left: 4px;
+                   background: var(--ok-soft); color: var(--ok); vertical-align: 1px; }
+  .task .t-title.link { cursor: pointer; }
+  .task .t-title.link:hover { text-decoration: underline; }
+  #viewerName { font-weight: 700; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 3px solid transparent;
+                              background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+      </div>
+      <div><b>Audio to Text</b><span>Local Whisper transcription</span></div>
+    </div>
+    <div class="side-new">
+      <button type="button" class="primary new-btn" id="newBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        New file
+      </button>
+    </div>
+    <div class="side-head">
+      <h2>History <span id="count"></span></h2>
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" id="search" placeholder="Search recordings...">
+      </div>
+    </div>
+    <ul id="records"></ul>
+  </aside>
+
+  <main>
+    <div class="wrap">
+      <header>
+        <h1>Turn speech into <em>text</em></h1>
+        <div class="head-btns">
+          <div class="tasks-wrap" id="tasksWrap">
+            <button type="button" class="tasks-btn" id="tasksBtn" aria-haspopup="true" aria-expanded="false" title="Running and queued tasks">
+              <span class="t-spin hidden" id="tasksSpin"></span>
+              <svg id="tasksIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+              <span id="tasksLabel">Tasks</span>
+            </button>
+            <div class="tasks-pop hidden" id="tasksPop" role="dialog" aria-label="Tasks">
+              <div class="tp-head">
+                <div><b>Tasks</b> <span class="hint" id="tasksSummary"></span></div>
+                <button type="button" class="linkish" id="clearTasks">Clear finished</button>
+              </div>
+              <div class="tp-body" id="tasksList"></div>
+            </div>
+          </div>
+          <button type="button" class="icon-btn" id="settingsBtn" title="Models &amp; settings" aria-label="Settings">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          </button>
+          <button type="button" class="icon-btn" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme"></button>
+        </div>
+      </header>
+
+      <div id="workspace">
+      <!-- shown when a saved record is open -->
+      <section class="card rec-head hidden" id="recHead">
+        <div class="rh-top">
+          <div class="rh-title">
+            <h2 id="recName" title="Double-click to rename"></h2>
+            <input id="recNameInput" class="name-input hidden" maxlength="120" aria-label="Record name">
+            <button type="button" class="icon-sm" id="renameBtn" title="Rename" aria-label="Rename">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+            </button>
+          </div>
+          <button type="button" class="ghost danger" id="deleteRecord">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+            Delete record
+          </button>
+        </div>
+        <div class="rename-err hidden" id="renameErr"></div>
+        <div class="hint" id="recMeta"></div>
+        <audio id="recAudio" controls preload="none" class="hidden"></audio>
+      </section>
+
+      <form id="form" class="card">
+        <div id="newOnly">
+          <div id="drop">
+            <div class="drop-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>
+            </div>
+            <div>
+              <div id="fileName"><strong>Click to choose</strong> or drag an audio/video file here</div>
+              <div class="hint">mp3, mp4, m4a, aac, ogg/opus, wav, webm ... up to 2 GB</div>
+            </div>
+          </div>
+          <input type="file" id="file" accept="audio/*,video/*">
+          <div class="name-row">
+            <label for="recordName">Name</label>
+            <input type="text" id="recordName" class="text-input" maxlength="120" placeholder="Defaults to the file name (must be unique)">
+          </div>
+        </div>
+        <div class="card-title hidden" id="runTitle">Run again · each run is saved as a new version</div>
+
+        <div class="options">
+          <div>
+            <label for="task">Task</label>
+            <select id="task">
+              <option value="transcribe">Transcribe</option>
+              <option value="translate">Translate → English</option>
+            </select>
+          </div>
+          <div>
+            <label for="language" title="Setting it explicitly is more reliable than auto-detect">Spoken language</label>
+            <select id="language">
+              <option value="">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="hi">Hindi</option>
+              <option value="ur">Urdu</option>
+              <option value="pa">Punjabi</option>
+              <option value="bn">Bengali</option>
+              <option value="mr">Marathi</option>
+              <option value="gu">Gujarati</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+              <option value="ar">Arabic</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="pt">Portuguese</option>
+              <option value="ru">Russian</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+          <div>
+            <label for="format">Output</label>
+            <select id="format">
+              <option value="timestamps">Text + timestamps</option>
+              <option value="txt">Plain text</option>
+              <option value="srt">Subtitles (.srt)</option>
+            </select>
+          </div>
+          <div>
+            <label for="device">Device</label>
+            <select id="device">
+              <option value="auto">Auto</option>
+              <option value="cpu">CPU</option>
+              <option value="cuda">GPU (CUDA)</option>
+            </select>
+          </div>
+          <div>
+            <label for="beam_size" title="Higher is slightly more accurate but slower">Beam size</label>
+            <input type="number" id="beam_size" min="1" max="10" value="5">
+          </div>
+          <div>
+            <label class="switch" title="Skips silence; reduces hallucinated text in quiet parts">
+              <input type="checkbox" id="vad" checked><span class="track"></span> Skip silence
+            </label>
+          </div>
+        </div>
+
+        <div class="minutes-row">
+          <div class="chosen">
+            <span class="chip" title="Speech-to-text model">🎙 <b id="chosenWhisper">…</b></span>
+            <span class="chip" title="Meeting-minutes model">📝 <b id="chosenLlm">…</b></span>
+            <button type="button" class="linkish" id="changeModels">Change models</button>
+          </div>
+          <div>
+            <label class="switch" title="After each transcription, write English meeting minutes with the local model">
+              <input type="checkbox" id="autoMinutes"><span class="track"></span> Also create meeting minutes (English)
+            </label>
+          </div>
+        </div>
+
+        <div class="form-foot">
+          <span class="hint privacy">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <span id="footHint">Runs locally, so your files never leave this machine.</span>
+          </span>
+          <div class="btns">
+            <button type="button" class="ghost hidden" id="genBtn" title="Choose the language and transcript version, then generate the minutes">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>
+              Generate minutes
+            </button>
+            <button type="submit" class="primary" id="start" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>
+              <span id="startText">Start</span>
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <section id="progressCard" class="card hidden" data-phase="uploading">
+        <div class="prog-head">
+          <div>
+            <span class="phase"><span class="dot"></span><span id="phase">Uploading</span></span>
+            <span class="hint prog-record" id="progRecord"></span>
+            <div id="statusText">Uploading...</div>
+          </div>
+          <div class="prog-right">
+            <div id="pct">0%</div>
+            <button type="button" class="stop-btn" id="stopJob" title="Stop this task">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
+              <span>Stop</span>
+            </button>
+          </div>
+        </div>
+        <div class="bar" id="bar"><div></div></div>
+
+        <div class="stats">
+          <div class="stat"><small>Elapsed</small><b id="elapsedStat">0:00</b></div>
+          <div class="stat"><small id="stat2Label">Audio processed</small><b id="stat2">—</b></div>
+          <div class="stat"><small id="stat3Label">Segments</small><b id="stat3">0</b></div>
+          <div class="stat"><small>Time left</small><b id="etaStat">—</b></div>
+        </div>
+
+        <div class="next" id="next">
+          <svg class="ring" viewBox="0 0 18 18"><circle class="bg" cx="9" cy="9" r="7"/><circle class="fg" id="ringFg" cx="9" cy="9" r="7"/></svg>
+          <span id="nextText">Next update in 5s</span>
+        </div>
+
+        <div class="panes">
+          <div>
+            <div class="pane-title" id="paneTitle">Live transcript</div>
+            <div class="scroll" id="transcript"></div>
+          </div>
+          <div>
+            <div class="pane-title">Progress updates · every 5s</div>
+            <div class="scroll"><ul id="log"></ul></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card hidden" id="viewer">
+        <div class="vtabs" role="tablist">
+          <button type="button" role="tab" class="vtab" data-view="transcripts">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+            Transcripts <span class="st" id="countT"></span>
+          </button>
+          <button type="button" role="tab" class="vtab" data-view="minutes">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>
+            Minutes of meeting <span class="st" id="countM"></span>
+          </button>
+        </div>
+
+        <div class="versions" id="versions" aria-label="Versions"></div>
+
+        <div class="viewer-head">
+          <div>
+            <span id="viewerName"></span>
+            <span id="viewerMeta" class="hint"></span>
+          </div>
+          <div class="btns" id="viewerBtns">
+            <button type="button" class="ghost hidden" id="newMomBtn" title="Generate another minutes version">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              New minutes
+            </button>
+            <button type="button" class="ghost hidden" id="editBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+              Edit
+            </button>
+            <button type="button" class="ghost hidden" id="cancelEdit">Cancel</button>
+            <button type="button" class="primary small hidden" id="saveEdit">Save changes</button>
+            <button type="button" class="ghost" id="copyViewer">Copy</button>
+            <a id="viewerDl" class="ghost" href="#">Download</a>
+            <button type="button" class="ghost danger" id="deleteVersion" title="Delete this version">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+              Delete version
+            </button>
+          </div>
+        </div>
+
+        <div id="transcriptPane">
+          <div id="tEmpty" class="empty-state hidden">
+            <div class="ic">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+            </div>
+            <h3>No transcript versions</h3>
+            <p id="tEmptyText">Use <b>Transcribe again</b> above to create one from the saved audio.</p>
+          </div>
+          <textarea id="viewerText" readonly></textarea>
+        </div>
+
+        <div id="minutesPane" class="hidden">
+          <!-- choose language + transcript version, then "Generate MOM" -->
+          <div id="genPanel" class="gen-panel hidden">
+            <div class="gp-head">
+              <div>
+                <div class="gp-title">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>
+                  Generate minutes of meeting (MOM)
+                </div>
+                <div class="hint">A summary, discussion points, decisions and action items, written by your local model. You can edit them afterwards.</div>
+              </div>
+              <button type="button" class="icon-sm" id="closeGen" title="Close" aria-label="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div class="gp-grid">
+              <div>
+                <label for="momLang">Language of the minutes</label>
+                <select id="momLang">
+                  <option value="en">English</option>
+                </select>
+                <div class="hint">English for now; more languages will be added later.</div>
+              </div>
+              <div>
+                <label for="momSource">Transcript version to use</label>
+                <select id="momSource"></select>
+                <div class="hint gp-preview" id="momPreview"></div>
+              </div>
+              <div>
+                <label>Model</label>
+                <div class="gp-model">
+                  <span class="chip">📝 <b id="momModel"></b></span>
+                  <button type="button" class="linkish" id="momChangeModel">Change</button>
+                </div>
+              </div>
+            </div>
+            <div class="gp-foot">
+              <span class="hint hidden" id="momBusy">Minutes are being generated for this recording. Follow them in Tasks.</span>
+              <button type="button" class="primary" id="generateMom">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>
+                <span id="generateMomText">Generate MOM</span>
+              </button>
+            </div>
+          </div>
+          <div id="minutesEmpty" class="empty-state hidden">
+            <div class="ic">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>
+            </div>
+            <h3>No minutes of meeting yet</h3>
+            <p>There is no transcript to work from yet. Transcribe the recording first.</p>
+          </div>
+          <article id="mdView" class="md hidden"></article>
+          <div id="mdEdit" class="md-edit hidden">
+            <div>
+              <div class="pane-title">Markdown · Ctrl+S to save</div>
+              <textarea id="mdEditor" spellcheck="true"></textarea>
+            </div>
+            <div>
+              <div class="pane-title">Live preview</div>
+              <article id="mdPreview" class="md"></article>
+            </div>
+          </div>
+        </div>
+      </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- settings: a panel that slides in from the right; the page behind is blurred -->
+<div id="settingsView" class="overlay hidden">
+  <div class="set-panel" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <div class="set-head">
+      <div>
+        <div class="set-title" id="setTitle">Models &amp; settings</div>
+        <div class="hint" id="checkedAt">Checking status...</div>
+      </div>
+      <div class="btns">
+        <button type="button" class="ghost" id="refreshModels" title="Re-check installed models, Ollama and system resources">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg>
+          Check &amp; refresh
+        </button>
+        <button type="button" class="icon-btn" id="closeSettings" title="Close (Esc)" aria-label="Close settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="sysgrid" id="sysInfo"></div>
+
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab" data-tab="whisper">🎙 Speech to text · Whisper <span class="count" id="countWhisper"></span></button>
+      <button type="button" role="tab" class="tab" data-tab="llm">📝 Meeting minutes · Ollama <span class="count" id="countLlm"></span></button>
+    </div>
+
+    <div class="card" role="tabpanel">
+      <div class="intro" id="tabIntro"></div>
+      <h4 class="sub">Recommended for your PC</h4>
+      <div class="models" id="modelGrid"></div>
+
+      <div class="lib-head">
+        <h4 class="sub">Model library <span class="count" id="libCount"></span></h4>
+        <div class="lib-tools">
+          <div class="search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="search" id="libSearch" placeholder="Search models...">
+          </div>
+          <div class="chips" id="libFilters">
+            <button type="button" class="fchip" data-f="all">All</button>
+            <button type="button" class="fchip" data-f="installed">Installed</button>
+            <button type="button" class="fchip" data-f="fits">Fits this PC</button>
+            <button type="button" class="fchip" data-f="multi">Multilingual</button>
+            <button type="button" class="fchip" data-f="en">English only</button>
+          </div>
+        </div>
+      </div>
+      <div class="lib" id="libList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const form = $("form"), fileInput = $("file"), drop = $("drop");
+const UPDATE_MS = 5000;  // progress refresh interval
+let startedAt = 0, pollTimer = 0, uploadTimer = 0, tickTimer = 0, nextAt = 0, transcribeStart = 0;
+let current = { frac: 0, text: "" };
+let settings = null;                                 // from data/db.json via /api/settings
+let records = [], rec = null;                        // sidebar summaries / the open record (null = new file)
+let view = "transcripts", sel = { transcripts: null, minutes: null }, editing = false;
+let currentJobId = null, currentXhr = null, currentUpload = null;
+
+const clock = secs => {
+  const s = Math.max(0, Math.floor(secs)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+};
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmtBytes = b => b == null ? "—" : b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e7 ? Math.round(b / 1e6) + " MB"
+  : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+const fmtDate = ts => new Date(ts * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+async function api(url, method = "GET", body) {
+  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {},
+                                 body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
+  return data;
+}
+
+/* ---------- theme ---------- */
+const root = document.documentElement;
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => root.dataset.theme ? root.dataset.theme === "dark" : darkQuery.matches;
+const SUN = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MOON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
+const renderThemeIcon = () => { $("themeToggle").innerHTML = isDark() ? SUN : MOON; };
+function applyTheme(theme) {
+  if (theme) root.dataset.theme = theme; else delete root.dataset.theme;
+  try { theme ? localStorage.setItem("theme", theme) : localStorage.removeItem("theme"); } catch {}  // only a no-flash cache
+  renderThemeIcon();
+}
+$("themeToggle").onclick = () => {
+  const theme = isDark() ? "light" : "dark";
+  applyTheme(theme);
+  saveSettings({ theme });
+};
+darkQuery.addEventListener("change", renderThemeIcon);
+renderThemeIcon();
+
+/* ---------- settings (stored in data/db.json) ---------- */
+const OPTION_IDS = ["task", "language", "format", "device", "beam_size"];
+const readOptions = () => ({ task: $("task").value, language: $("language").value, format: $("format").value,
+                             device: $("device").value, beam_size: +$("beam_size").value || 5, vad: $("vad").checked });
+
+async function loadSettings() {
+  try { settings = await api("/api/settings"); } catch { return; }
+  const o = settings.options;
+  for (const k of OPTION_IDS) $(k).value = o[k];
+  $("vad").checked = o.vad;
+  $("autoMinutes").checked = settings.auto_minutes;
+  choice.whisper = settings.whisper_model;
+  choice.llm = settings.llm_model;
+  $("chosenWhisper").textContent = choice.whisper;
+  $("chosenLlm").textContent = choice.llm;
+  applyTheme(settings.theme);
+}
+async function saveSettings(patch) {
+  try { settings = await api("/api/settings", "PUT", patch); } catch (e) { console.warn("Settings not saved:", e); }
+}
+for (const k of [...OPTION_IDS, "vad"]) $(k).addEventListener("change", () => saveSettings({ options: readOptions() }));
+$("autoMinutes").onchange = () => saveSettings({ auto_minutes: $("autoMinutes").checked });
+
+/* ---------- new file: upload ---------- */
+function pickFile(f) {
+  if (!f) return;
+  const dt = new DataTransfer(); dt.items.add(f); fileInput.files = dt.files;
+  $("fileName").textContent = `${f.name} (${fmtBytes(f.size)})`;
+  $("recordName").placeholder = f.name.replace(/\.[^.]+$/, "") + " (you can rename it)";
+  drop.classList.add("has-file");
+  $("start").disabled = !!currentXhr;
+}
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => pickFile(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); pickFile(e.dataTransfer.files[0]); };
+
+form.onsubmit = e => { e.preventDefault(); rec ? transcribeAgain() : uploadNew(); };
+
+function uploadNew() {
+  const f = fileInput.files[0];
+  if (!f || currentXhr) return;
+  const data = new FormData();
+  data.set("file", f);
+  data.set("name", $("recordName").value.trim());
+  data.set("model", choice.whisper || "");
+  for (const [k, v] of Object.entries(readOptions())) data.set(k, String(v));
+
+  prepareCard("transcribe", $("recordName").value.trim() || f.name.replace(/\.[^.]+$/, ""));
+  setProgress(0, `Uploading ${f.name}...`, "uploading");
+  logUpdate("Upload started");
+  uploadTimer = setInterval(() => { logUpdate(); nextAt = Date.now() + UPDATE_MS; }, UPDATE_MS);
+
+  // XHR (not fetch) so we get upload progress events.
+  const xhr = new XMLHttpRequest();
+  currentXhr = xhr;
+  currentUpload = { name: f.name, frac: 0, started: Date.now() / 1000 };
+  $("start").disabled = true;
+  refreshTasks();
+  xhr.open("POST", "/api/records");
+  xhr.upload.onprogress = ev => {
+    if (!ev.lengthComputable) return;
+    currentUpload.frac = ev.loaded / ev.total;
+    setProgress(currentUpload.frac, `Uploading ${f.name}...`, "uploading");
+  };
+  xhr.onload = async () => {
+    clearInterval(uploadTimer);
+    currentXhr = null; currentUpload = null;
+    let res = {};
+    try { res = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status === 404 && !res.error)  // index.html is re-read per request, app.py only at startup
+      return fail("Upload failed: the server is running an older app.py. Restart it (Ctrl+C, then python app.py) and try again.");
+    if (xhr.status !== 200) return fail(res.error || `Upload failed (${xhr.status})`);
+    setProgress(1, "Upload complete", "uploading");
+    logUpdate();
+    $("progRecord").textContent = "· " + res.name;
+    track(res.job, "transcribe", false);
+    await loadRecords();
+    openRecord(res.record);
+  };
+  xhr.onerror = () => fail("Upload failed: server unreachable");
+  xhr.onabort = () => { clearInterval(uploadTimer); stopped("Upload cancelled"); };
+  xhr.send(data);
+}
+
+async function transcribeAgain() {
+  if (!rec?.audio) return;
+  let r;
+  try { r = await api(`/api/records/${rec.id}/transcribe`, "POST", { ...readOptions(), model: choice.whisper }); }
+  catch (e) { return alert(e.message); }
+  prepareCard("transcribe", rec.name);
+  setProgress(null, "Queued", "queued");
+  logUpdate(`Transcription requested · ${choice.whisper}`);
+  track(r.job, "transcribe", false);
+  loadRecords();
+}
+
+async function startMinutes(recordId, transcriptId, name, language = "en") {
+  if (minutesBusy(recordId)) return;
+  startingMinutes = recordId;  // covers the moment before the server lists the job
+  updateGenButtons();
+  let r;
+  try {
+    r = await api(`/api/records/${recordId}/minutes`, "POST", { model: choice.llm, transcript: transcriptId, language });
+  } catch (e) {
+    startingMinutes = null; updateGenButtons();
+    return alert(e.message);
+  }
+  prepareCard("minutes", name);
+  setProgress(null, "Creating English meeting minutes...", "queued");
+  logUpdate(`Minutes requested · ${choice.llm}`);
+  currentJobKind = "minutes"; currentJobRecord = recordId;
+  track(r.job, "minutes", false);
+  startingMinutes = null;
+  loadRecords();
+}
+
+// One minutes job per recording at a time: true while one is starting, queued or running.
+let startingMinutes = null, currentJobKind = null, currentJobRecord = null;
+function minutesBusy(recordId = rec?.id) {
+  if (!recordId) return false;
+  return startingMinutes === recordId
+    || (currentJobId && currentJobKind === "minutes" && currentJobRecord === recordId)
+    || tasks.some(t => t.active && t.type === "minutes" && t.record === recordId);
+}
+function updateGenButtons() {
+  if (!rec) return;
+  const busy = minutesBusy(), hasTranscripts = rec.transcripts.length > 0;
+  $("generateMom").disabled = busy || !hasTranscripts;
+  $("generateMomText").textContent = busy ? "Generating..." : "Generate MOM";
+  $("momBusy").classList.toggle("hidden", !busy);
+  $("genBtn").disabled = busy || !hasTranscripts;
+  $("genBtn").title = busy ? "Minutes are already being generated for this recording"
+                           : "Choose the language and transcript version, then generate the minutes";
+  $("newMomBtn").disabled = busy;
+}
+// "Generate minutes" opens the panel in the Minutes tab; "Generate MOM" there starts the job.
+let genOpen = false, momSource = null;
+function openGen() {
+  if (!rec || !leaveEdit()) return;
+  view = "minutes"; editing = false; genOpen = true;
+  momSource = sel.transcripts;  // default: the transcript version you were looking at
+  renderViewer();
+  $("genPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("genBtn").onclick = openGen;
+$("newMomBtn").onclick = openGen;
+$("closeGen").onclick = () => { genOpen = false; renderViewer(); };
+$("momSource").onchange = () => { momSource = $("momSource").value; renderGenPanel(); };
+$("momChangeModel").onclick = () => showSettings(true);
+$("generateMom").onclick = () => {
+  if (!rec || !$("momSource").value || minutesBusy()) return;
+  genOpen = false;
+  startMinutes(rec.id, $("momSource").value, rec.name, $("momLang").value);
+  renderViewer();
+};
+
+function renderGenPanel() {
+  const list = rec.transcripts;
+  if (!list.some(v => v.id === momSource)) momSource = sel.transcripts || list.at(-1)?.id;
+  const select = $("momSource");
+  select.innerHTML = "";
+  for (const v of [...list].reverse())
+    select.add(new Option(`v${v.n}${v === list.at(-1) ? " (latest)" : ""} · ${versionMeta(v, false)}`, v.id, false, v.id === momSource));
+  const src = list.find(v => v.id === momSource);
+  const words = src?.text.trim() ? src.text.trim().split(/\s+/).length : 0;
+  $("momPreview").textContent = src ? `${words.toLocaleString()} words · “${src.text.trim().slice(0, 160)}${src.text.length > 160 ? "…" : ""}”` : "";
+  $("momModel").textContent = catalog ? modelLabel("llm") : choice.llm;
+  // no minutes yet: the panel is the way in, so it can't be closed
+  $("closeGen").classList.toggle("hidden", !rec.minutes.length);
+}
+
+/* ---------- progress card ---------- */
+const PHASES = { uploading: "Uploading", queued: "Queued", loading: "Loading model",
+                 transcribing: "Transcribing", generating: "Writing minutes",
+                 done: "Completed", error: "Failed", cancelled: "Stopped" };
+
+function setProgress(frac, text, phase) {
+  const bar = $("bar");
+  bar.classList.toggle("indeterminate", frac == null);
+  bar.firstElementChild.style.width = frac == null ? "" : (frac * 100).toFixed(1) + "%";
+  $("pct").textContent = frac == null ? "…" : Math.floor(frac * 100) + "%";
+  $("statusText").textContent = text;
+  $("phase").textContent = PHASES[phase] || phase;
+  $("progressCard").dataset.phase = phase;
+  current = { frac, text };
+}
+
+// Adds a timestamped entry to the "Progress updates" list (newest first).
+function logUpdate(text = current.text) {
+  const li = document.createElement("li");
+  li.innerHTML = `<time></time><span class="p"></span><span class="m"></span>`;
+  li.children[0].textContent = clock((Date.now() - startedAt) / 1000);
+  li.children[1].textContent = current.frac == null ? "…" : Math.floor(current.frac * 100) + "%";
+  li.children[2].textContent = text;
+  $("log").prepend(li);
+}
+
+// Runs every second: elapsed clock and countdown to the next 5s update.
+function tick() {
+  $("elapsedStat").textContent = clock((Date.now() - startedAt) / 1000);
+  const left = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+  $("next").classList.toggle("hidden", !nextAt);
+  $("nextText").textContent = left ? `Next update in ${left}s` : "Updating...";
+  $("ringFg").style.strokeDashoffset = 44 * (left / (UPDATE_MS / 1000));
+}
+
+function stopTimers() {
+  clearInterval(uploadTimer); clearTimeout(pollTimer); clearInterval(tickTimer);
+  nextAt = 0; tick();
+}
+
+// Resets the progress card for a new job; kind is "transcribe" or "minutes".
+function prepareCard(kind, recordName) {
+  stopTimers();
+  const minutes = kind === "minutes";
+  $("progressCard").classList.remove("hidden");
+  $("progressCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("progRecord").textContent = recordName ? "· " + recordName : "";
+  $("transcript").innerHTML = ""; $("log").innerHTML = "";
+  $("transcript").classList.toggle("prose", minutes);
+  $("paneTitle").textContent = minutes ? "Minutes (live, English)" : "Live transcript";
+  $("stat2Label").textContent = minutes ? "Tokens written" : "Audio processed";
+  $("stat3Label").textContent = minutes ? "Speed" : "Segments";
+  $("stat2").textContent = minutes ? "0" : "—"; $("stat3").textContent = minutes ? "—" : "0";
+  $("etaStat").textContent = "—";
+  $("stopJob").disabled = false; $("stopJob").lastElementChild.textContent = "Stop";
+  startedAt = Date.now(); transcribeStart = 0;
+  nextAt = Date.now() + UPDATE_MS;
+  tickTimer = setInterval(tick, 1000); tick();
+}
+
+// Follow a server job in the progress card (only one at a time; others show in the Tasks menu).
+function track(jobId, kind, fresh = true, recordName) {
+  if (fresh) prepareCard(kind, recordName);
+  clearTimeout(pollTimer);
+  currentJobId = jobId;
+  kind === "minutes" ? pollMinutes(jobId) : poll(jobId, 0);
+  refreshTasks();
+}
+
+function endJob() {
+  currentJobId = null; currentXhr = null; currentUpload = null; currentJobKind = null; currentJobRecord = null;
+  stopTimers();
+  refreshTasks();
+  renderMode();
+}
+
+function fail(msg) {
+  setProgress(current.frac ?? 0, msg, "error");
+  logUpdate();
+  endJob();
+}
+
+function stopped(msg) {
+  setProgress(current.frac ?? 0, msg || "Stopped by user", "cancelled");
+  $("etaStat").textContent = "—";
+  logUpdate();
+  endJob();
+}
+
+$("stopJob").onclick = () => {
+  if (currentXhr) return currentXhr.abort();
+  if (!currentJobId) return;
+  $("stopJob").disabled = true; $("stopJob").lastElementChild.textContent = "Stopping...";
+  stopTask(currentJobId);
+};
+
+function schedule(fn) {
+  nextAt = Date.now() + UPDATE_MS;
+  pollTimer = setTimeout(fn, UPDATE_MS);
+}
+
+async function jobFinished(job) {
+  setProgress(1, job.message, "done");
+  $("etaStat").textContent = "Done";
+  logUpdate("Completed · " + job.message);
+  endJob();
+  const out = job.output;
+  await loadRecords();
+  if (rec?.id === out.record) await openRecord(out.record, { kind: out.kind, version: out.version });
+  if (out.kind === "transcripts" && settings?.auto_minutes) startMinutes(out.record, out.version, job.record_name);
+}
+
+async function poll(id, since) {
+  let job;
+  try {
+    job = await (await fetch(`/api/jobs/${id}?since=${since}`)).json();
+  } catch { return schedule(() => poll(id, since)); }
+  if (currentJobId !== id) return;  // the card moved on to another job
+
+  const box = $("transcript");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+  for (const s of job.segments || []) {
+    const div = document.createElement("div");
+    div.className = "seg";
+    div.innerHTML = `<time></time><span></span>`;
+    div.children[0].textContent = s.start;
+    div.children[1].textContent = s.text;
+    box.appendChild(div);
+  }
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (job.record_name) $("progRecord").textContent = "· " + job.record_name;
+
+  $("stat3").textContent = job.segment_count;
+  if (job.duration) $("stat2").textContent = `${clock(job.duration * job.progress)} / ${clock(job.duration)}`;
+
+  if (job.status === "error") return fail(job.message);
+  if (job.status === "cancelled") return stopped(job.message);
+  if (job.status === "done") return jobFinished(job);
+
+  const indeterminate = job.status !== "transcribing" || job.segment_count === 0;
+  if (job.status === "transcribing" && !transcribeStart) transcribeStart = Date.now();
+  setProgress(indeterminate ? null : job.progress, job.message, job.status);
+  if (!indeterminate && job.progress > 0.01) {
+    const spent = (Date.now() - transcribeStart) / 1000;
+    $("etaStat").textContent = "~" + clock(spent * (1 - job.progress) / job.progress);
+  }
+  logUpdate();
+  schedule(() => poll(id, job.segment_count));
+}
+
+async function pollMinutes(id) {
+  let job;
+  try {
+    job = await (await fetch(`/api/jobs/${id}`)).json();
+  } catch { return schedule(() => pollMinutes(id)); }
+  if (currentJobId !== id) return;
+
+  const box = $("transcript");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+  box.textContent = job.text;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (job.record_name) $("progRecord").textContent = "· " + job.record_name;
+  $("stat2").textContent = job.tokens;
+  $("stat3").textContent = job.speed ? job.speed.toFixed(1) + " tok/s" : "—";
+
+  if (job.status === "error") return fail(job.message);
+  if (job.status === "cancelled") return stopped(job.message);
+  if (job.status === "done") return jobFinished(job);
+  setProgress(null, job.message, job.status);
+  logUpdate();
+  schedule(() => pollMinutes(id));
+}
+
+/* ---------- history (records) ---------- */
+const ICON_AUDIO = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>`;
+const ICON_DOC = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>`;
+const DOC_ICON_SM = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>`;
+
+async function loadRecords() {
+  try { records = await api("/api/records"); } catch { return; }
+  renderRecords();
+}
+
+function renderRecords() {
+  const q = $("search").value.trim().toLowerCase();
+  const list = records.filter(r => !q || r.name.toLowerCase().includes(q) || (r.audio_name || "").toLowerCase().includes(q));
+  $("count").textContent = records.length || "";
+  const ul = $("records");
+  ul.innerHTML = "";
+  if (!list.length) {
+    ul.innerHTML = `<li class="empty">${records.length ? "No matches." : "No recordings yet.<br>Click <b>New file</b> to start."}</li>`;
+    return;
+  }
+  for (const r of list) {
+    const li = document.createElement("li");
+    li.classList.toggle("selected", r.id === rec?.id);
+    li.innerHTML = `<span class="r-ic" title="${r.has_audio ? "Audio saved" : "No audio (imported)"}">${r.has_audio ? ICON_AUDIO : ICON_DOC}</span>
+      <div class="body"><div class="name"></div><div class="meta"></div><div class="r-pills"></div></div>`;
+    li.querySelector(".name").textContent = r.name;
+    li.querySelector(".meta").textContent =
+      `${r.transcripts} transcript${r.transcripts === 1 ? "" : "s"} · ${fmtDate(r.updated)}`;
+    const pills = li.querySelector(".r-pills");
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "mpill " + (r.minutes ? "yes" : "no");
+    pill.innerHTML = DOC_ICON_SM + `<span></span>`;
+    pill.lastChild.textContent = r.minutes ? `Minutes${r.minutes > 1 ? ` · ${r.minutes} versions` : ""}` : "No minutes";
+    pill.title = r.minutes ? "Open the minutes of meeting" : "No minutes yet";
+    pill.onclick = e => { e.stopPropagation(); openRecord(r.id, { kind: "minutes" }); };
+    pills.appendChild(pill);
+    if (r.busy) pills.insertAdjacentHTML("beforeend", `<span class="mpill busy"><span class="t-spin"></span>Working</span>`);
+    li.onclick = () => openRecord(r.id);
+    ul.appendChild(li);
+  }
+}
+$("search").oninput = renderRecords;
+
+// Open a record; focus = { kind, version } picks the tab and version to show.
+async function openRecord(id, focus) {
+  if (!leaveEdit()) return;
+  let data;
+  try { data = await api(`/api/records/${id}`); }
+  catch (e) {
+    if (e.status === 404) { await loadRecords(); if (!rec || rec.id === id) newFile(); }
+    else alert(e.message);
+    return;
+  }
+  const same = rec?.id === id;
+  rec = data;
+  editing = false;
+  if (!same) genOpen = false;
+  for (const kind of ["transcripts", "minutes"]) {
+    const list = rec[kind];
+    if (focus?.kind === kind && focus.version) sel[kind] = focus.version;
+    else if (!same || !list.some(v => v.id === sel[kind])) sel[kind] = list.at(-1)?.id || null;
+  }
+  if (focus?.kind) view = focus.kind;
+  else if (!same) view = rec.transcripts.length || !rec.minutes.length ? "transcripts" : "minutes";
+  finishRename(false);
+  renderRecords();
+  renderMode();
+  renderViewer();
+  // Reattach the progress card to work already running for this record (e.g. after a page reload).
+  if (!currentJobId && !currentXhr && rec.active_jobs.length) {
+    const job = rec.active_jobs.at(-1);
+    track(job.id, job.kind, true, rec.name);
+  }
+}
+
+function newFile() {
+  if (!leaveEdit()) return;
+  rec = null;
+  editing = false;
+  if (!currentXhr) {
+    fileInput.value = "";
+    $("fileName").innerHTML = "<strong>Click to choose</strong> or drag an audio/video file here";
+    drop.classList.remove("has-file");
+    $("recordName").value = "";
+    $("recordName").placeholder = "Defaults to the file name (must be unique)";
+  }
+  renderRecords();
+  renderMode();
+}
+$("newBtn").onclick = newFile;
+
+// Switches the form between "new file" (upload) and "open record" (run again) modes.
+function renderMode() {
+  const isNew = !rec;
+  $("newOnly").classList.toggle("hidden", !isNew);
+  $("recHead").classList.toggle("hidden", isNew);
+  $("viewer").classList.toggle("hidden", isNew);
+  $("runTitle").classList.toggle("hidden", isNew);
+  $("genBtn").classList.toggle("hidden", isNew);
+  $("startText").textContent = isNew ? "Start" : "Transcribe again";
+  if (isNew) {
+    $("start").disabled = !fileInput.files[0] || !!currentXhr;
+    $("start").title = "";
+    $("footHint").textContent = "Runs locally, so your files never leave this machine.";
+    return;
+  }
+  $("start").disabled = !rec.audio;
+  $("start").title = rec.audio ? "Run Whisper on the saved audio again; the result is kept as a new version"
+                               : "This record has no saved audio (it was imported from an older version of the app)";
+  updateGenButtons();
+  $("footHint").textContent = rec.audio ? "Runs on the saved audio. Earlier versions are kept."
+                                        : "No saved audio for this record, so it can't be transcribed again.";
+  $("recName").textContent = rec.name;
+  $("recMeta").textContent = [
+    rec.audio ? `${rec.audio.name} · ${fmtBytes(rec.audio.size)}` : "No audio saved (imported transcript)",
+    `created ${fmtDate(rec.created)}`,
+  ].join(" · ");
+  const audio = $("recAudio"), src = rec.audio ? `/api/records/${rec.id}/audio` : "";
+  audio.classList.toggle("hidden", !src);
+  if (audio.getAttribute("src") !== src) { if (src) audio.src = src; else audio.removeAttribute("src"); }
+}
+
+/* ---------- rename / delete record ---------- */
+function startRename() {
+  const input = $("recNameInput");
+  input.value = rec.name;
+  $("recName").classList.add("hidden"); $("renameBtn").classList.add("hidden");
+  input.classList.remove("hidden");
+  $("renameErr").classList.add("hidden");
+  input.focus(); input.select();
+}
+function endRename() {
+  $("recNameInput").classList.add("hidden");
+  $("recName").classList.remove("hidden"); $("renameBtn").classList.remove("hidden");
+  $("renameErr").classList.add("hidden");
+}
+async function finishRename(save) {
+  const input = $("recNameInput");
+  if (input.classList.contains("hidden")) return;
+  const name = input.value.trim();
+  if (!save || !rec || !name || name === rec.name) return endRename();
+  try {
+    const r = await api(`/api/records/${rec.id}`, "PATCH", { name });
+    rec.name = r.name;
+    endRename();
+    renderMode();
+    loadRecords();
+  } catch (e) {
+    $("renameErr").textContent = e.message;
+    $("renameErr").classList.remove("hidden");
+  }
+}
+$("renameBtn").onclick = startRename;
+$("recName").ondblclick = startRename;
+$("recNameInput").onkeydown = e => {
+  if (e.key === "Enter") { e.preventDefault(); finishRename(true); }
+  if (e.key === "Escape") { e.stopPropagation(); finishRename(false); }
+};
+$("recNameInput").onblur = () => finishRename(true);
+
+$("deleteRecord").onclick = async () => {
+  const parts = [`${rec.transcripts.length} transcript version(s)`, `${rec.minutes.length} minutes version(s)`];
+  if (rec.audio) parts.push("the saved audio");
+  if (!confirm(`Delete "${rec.name}"?\n\nThis removes ${parts.join(", ")}. It can't be undone.`)) return;
+  try { await api(`/api/records/${rec.id}`, "DELETE"); } catch (e) { return alert(e.message); }
+  rec = null; editing = false;
+  await loadRecords();
+  newFile();
+  refreshTasks();
+};
+
+/* ---------- viewer: versions of transcripts / minutes ---------- */
+const FORMAT_LABEL = { timestamps: "text + timestamps", txt: "plain text", srt: "subtitles" };
+const current_version = () => rec?.[view].find(v => v.id === sel[view]) || null;
+
+function versionMeta(v, isMinutes, long) {
+  const parts = [fmtDate(v.created)];
+  if (v.model) parts.push(v.model);
+  if (!isMinutes) {
+    if (v.task === "translate") parts.push("→ English");
+    const lang = v.language || v.detected_language;
+    if (lang) parts.push(v.language ? lang : `${lang} (auto)`);
+    if (long && v.format) parts.push(FORMAT_LABEL[v.format]);
+  } else {
+    if (long && v.language) parts.push(v.language === "en" ? "English" : v.language);
+    if (v.source_n) parts.push(`from transcript v${v.source_n}`);
+  }
+  if (v.edited) parts.push("edited");
+  if (v.imported) parts.push("imported");
+  return parts.join(" · ");
+}
+
+function renderViewer() {
+  if (!rec) return;
+  const isMinutes = view === "minutes", list = rec[view], v = current_version();
+  for (const t of document.querySelectorAll(".vtab")) t.setAttribute("aria-selected", t.dataset.view === view);
+  $("countT").textContent = rec.transcripts.length;
+  $("countT").className = "st " + (rec.transcripts.length ? "yes" : "no");
+  $("countM").textContent = rec.minutes.length;
+  $("countM").className = "st " + (rec.minutes.length ? "yes" : "no");
+
+  // version chips, newest first
+  const bar = $("versions");
+  bar.innerHTML = "";
+  bar.classList.toggle("hidden", !list.length);
+  for (const x of [...list].reverse()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "vchip" + (x.id === sel[view] ? " on" : "");
+    chip.innerHTML = `<b>v${x.n}${x === list.at(-1) ? ' <span class="latest">latest</span>' : ""}</b><small></small>`;
+    chip.querySelector("small").textContent = versionMeta(x, isMinutes);
+    chip.onclick = () => {
+      if (x.id === sel[view] || !leaveEdit()) return;
+      sel[view] = x.id; editing = false;
+      renderViewer();
+    };
+    bar.appendChild(chip);
+  }
+
+  const text = v?.text || "";
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  $("viewerName").textContent = v ? `${isMinutes ? "Minutes" : "Transcript"} v${v.n}` : "";
+  $("viewerMeta").textContent = v ? `${words.toLocaleString()} words · ${versionMeta(v, isMinutes, true)}` +
+                                    (editing ? " · editing" : "") : "";
+
+  $("transcriptPane").classList.toggle("hidden", isMinutes);
+  $("minutesPane").classList.toggle("hidden", !isMinutes);
+  if (!isMinutes) {
+    $("tEmpty").classList.toggle("hidden", !!v);
+    $("tEmptyText").innerHTML = rec.audio ? "Use <b>Transcribe again</b> above to create one from the saved audio."
+                                          : "This record has no saved audio, so it can't be transcribed.";
+    $("viewerText").classList.toggle("hidden", !v);
+    $("viewerText").readOnly = !editing;
+    $("viewerText").classList.toggle("editing", editing);
+    if (!editing) $("viewerText").value = text;  // don't overwrite what is being typed
+  } else {
+    const showGen = !editing && rec.transcripts.length > 0 && (genOpen || !rec.minutes.length);
+    $("genPanel").classList.toggle("hidden", !showGen);
+    if (showGen) renderGenPanel();
+    $("minutesEmpty").classList.toggle("hidden", !!v || rec.transcripts.length > 0);
+    $("mdView").classList.toggle("hidden", !v || editing);
+    if (v && !editing) $("mdView").innerHTML = mdToHtml(text);
+    $("mdEdit").classList.toggle("hidden", !editing);
+  }
+
+  $("viewerBtns").classList.toggle("hidden", !v);
+  $("editBtn").classList.toggle("hidden", editing);
+  $("newMomBtn").classList.toggle("hidden", !isMinutes || editing || genOpen || !rec.transcripts.length);
+  $("saveEdit").classList.toggle("hidden", !editing);
+  $("cancelEdit").classList.toggle("hidden", !editing);
+  $("viewerDl").classList.toggle("hidden", editing);
+  $("deleteVersion").classList.toggle("hidden", editing);
+  if (v) $("viewerDl").href = `/api/records/${rec.id}/versions/${v.id}/download`;
+  updateGenButtons();
+}
+
+for (const t of document.querySelectorAll(".vtab")) {
+  t.onclick = () => {
+    if (t.dataset.view === view || !leaveEdit()) return;
+    view = t.dataset.view; editing = false; genOpen = false;
+    renderViewer();
+  };
+}
+
+$("deleteVersion").onclick = async () => {
+  const v = current_version();
+  if (!v) return;
+  const label = view === "minutes" ? "minutes" : "transcript";
+  if (!confirm(`Delete ${label} v${v.n}? This can't be undone.`)) return;
+  try { await api(`/api/records/${rec.id}/versions/${v.id}`, "DELETE"); } catch (e) { return alert(e.message); }
+  sel[view] = null;
+  await openRecord(rec.id);
+  loadRecords();
+};
+
+/* ---------- editing transcripts and minutes ---------- */
+// Transcripts are edited as plain text in place; minutes as Markdown with a live preview.
+const editor = () => view === "minutes" ? $("mdEditor") : $("viewerText");
+
+// True when it is fine to leave edit mode (no unsaved changes, or the user agreed to discard them).
+function leaveEdit() {
+  if (!editing) return true;
+  if (editor().value === (current_version()?.text || "")) return true;
+  return confirm(`Discard your unsaved changes to the ${view === "minutes" ? "minutes" : "transcript"}?`);
+}
+
+$("editBtn").onclick = () => {
+  const v = current_version();
+  if (!v) return;
+  editing = true; genOpen = false;
+  if (view === "minutes") {
+    $("mdEditor").value = v.text;
+    $("mdPreview").innerHTML = mdToHtml(v.text);
+  }
+  renderViewer();
+  const box = editor();
+  box.setSelectionRange(0, 0);
+  box.scrollTop = 0;
+  box.focus({ preventScroll: true });
+};
+$("mdEditor").oninput = () => { $("mdPreview").innerHTML = mdToHtml($("mdEditor").value); };
+for (const box of [$("mdEditor"), $("viewerText")]) {
+  box.addEventListener("keydown", e => {
+    if (editing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveEdit(); }
+  });
+}
+$("cancelEdit").onclick = () => { if (leaveEdit()) { editing = false; renderViewer(); } };
+$("saveEdit").onclick = saveEdit;
+
+async function saveEdit() {
+  const v = current_version(), btn = $("saveEdit");
+  if (!v || !editing) return;
+  btn.disabled = true; btn.textContent = "Saving...";
+  try {
+    await api(`/api/records/${rec.id}/versions/${v.id}`, "PUT", { text: editor().value });
+    editing = false;
+    await openRecord(rec.id, { kind: view, version: v.id });
+    loadRecords();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Save changes";
+  }
+}
+window.addEventListener("beforeunload", e => {
+  if (currentXhr || (editing && editor().value !== (current_version()?.text || ""))) e.preventDefault();
+});
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {  // fallback when the Clipboard API is unavailable
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  const label = btn.textContent;
+  btn.textContent = "Copied!";
+  setTimeout(() => (btn.textContent = label), 1500);
+}
+$("copyViewer").onclick = e => copyText(editing ? editor().value : current_version()?.text || "", e.currentTarget);
+
+/* ---------- minimal markdown renderer (headings, lists, tables, emphasis, code) ---------- */
+function mdInline(t) {
+  return esc(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
+    .replace(/(^|[\s(])_([^_\s][^_]*?)_(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+}
+
+function mdToHtml(src) {
+  const lines = src.replace(/\r/g, "").split("\n"), out = [];
+  const LIST = /^\s*([-*+]|\d+[.)])\s+/, RULE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
+  const isBlock = l => /^(#{1,6}\s|```|>|\s*\|)/.test(l) || LIST.test(l) || RULE.test(l);
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  let i = 0, inSection = false;
+  while (i < lines.length) {
+    const line = lines[i];
+    let m;
+    if (!line.trim()) { i++; continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) {
+      const level = m[1].length;
+      if (level <= 2 && inSection) { out.push("</section>"); inSection = false; }
+      if (level === 2) { out.push('<section class="md-sec">'); inSection = true; }  // one card per section
+      out.push(`<h${level}>${mdInline(m[2])}</h${level}>`);
+      i++;
+    } else if (/^```/.test(line)) {
+      const buf = [];
+      for (i++; i < lines.length && !/^```/.test(lines[i]); i++) buf.push(lines[i]);
+      i++;
+      out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`);
+    } else if (RULE.test(line)) {
+      out.push("<hr>"); i++;
+    } else if (/^\s*\|/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
+      const head = cells(line), rows = [];
+      for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) rows.push(cells(lines[i]));
+      out.push(`<div class="tbl"><table><thead><tr>${head.map(c => `<th>${mdInline(c)}</th>`).join("")}</tr></thead><tbody>` +
+               rows.map(r => `<tr>${r.map(c => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("") + `</tbody></table></div>`);
+    } else if (LIST.test(line)) {
+      const ordered = /^\s*\d/.test(line), items = [];
+      while (i < lines.length && LIST.test(lines[i])) {
+        let item = lines[i++].replace(LIST, "");
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !LIST.test(lines[i])) item += " " + lines[i++].trim();
+        const task = item.match(/^\[([ xX])\]\s+(.*)$/);
+        items.push(task ? `<li class="task">${task[1] === " " ? "☐" : "☑"} ${mdInline(task[2])}</li>` : `<li>${mdInline(item)}</li>`);
+      }
+      out.push(ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`);
+    } else if (/^>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^>/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${buf.map(mdInline).join("<br>")}</blockquote>`);
+    } else {
+      const buf = [lines[i++]];  // always consume at least one line
+      while (i < lines.length && lines[i].trim() && !isBlock(lines[i])) buf.push(lines[i++]);
+      out.push(`<p>${buf.map(l => mdInline(l.trim())).join("<br>")}</p>`);
+    }
+  }
+  if (inSection) out.push("</section>");
+  return out.join("");
+}
+
+/* ---------- model settings (right-side panel) ---------- */
+// Chosen models live in data/db.json; the lightest model of each kind is the default.
+const choice = { whisper: null, llm: null };
+let catalog = null, modelTimer = 0, activeTab = "whisper", libFilter = "all";
+
+async function loadModels() {
+  $("refreshModels").classList.add("spin");
+  try { catalog = await (await fetch("/api/models")).json(); }
+  catch { $("checkedAt").textContent = "Could not reach the app server."; return; }
+  finally { $("refreshModels").classList.remove("spin"); }
+  if (!catalog.system) {  // index.html is re-read per request, app.py only at startup
+    $("checkedAt").textContent = "The server is running an older app.py. Restart it (Ctrl+C, then python app.py) and reload this page.";
+    catalog = null;
+    return;
+  }
+  for (const kind of ["whisper", "llm"])
+    if (!catalog[kind].some(m => m.id === choice[kind])) choice[kind] = catalog["default_" + kind];
+  const downloading = [...catalog.whisper, ...catalog.llm].some(m => m.download.status === "downloading");
+  $("checkedAt").textContent = `Last checked ${new Date(catalog.checked * 1000).toLocaleTimeString()}` +
+    (downloading ? " · refreshing every 2s while downloading" : "");
+  renderModels();
+  clearTimeout(modelTimer);
+  if (downloading) modelTimer = setTimeout(loadModels, 2000);
+}
+
+function modelLabel(kind) {
+  const m = catalog[kind].find(m => m.id === choice[kind]);
+  return m.label + (m.installed ? "" : " · downloads on first use");
+}
+
+// Whether the model is likely to run comfortably with the RAM that is free right now.
+function fit(m) {
+  const sys = catalog.system, need = m.ram_gb * 1e9;
+  if (!sys.ram_available || !m.ram_gb) return ["—", ""];
+  if (need <= sys.ram_available) return ["Yes", "fit-yes"];
+  if (need <= sys.ram_total) return ["Tight", "fit-tight"];
+  return ["No", "fit-no"];
+}
+
+const badge = m => {
+  const dl = m.download;
+  if (dl.status === "downloading")
+    return `<span class="badge dl">Downloading ${dl.progress ? Math.floor(dl.progress * 100) + "%" : ""}</span>`;
+  if (m.installed) return `<span class="badge ok">✓ Installed</span>`;
+  if (dl.status === "error") return `<span class="badge err">Download failed</span>`;
+  return `<span class="badge no">Not downloaded</span>`;
+};
+
+// Download / "Use" controls, shared by the recommended cards and the library rows.
+function modelActions(kind, m, box) {
+  const dl = m.download, downloading = dl.status === "downloading";
+  if (!m.installed && !downloading) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "ghost";
+    btn.textContent = dl.status === "error" ? "Retry" : `Download ${m.bytes ? fmtBytes(m.bytes) : ""}`;
+    btn.disabled = kind === "llm" && !catalog.ollama;
+    btn.onclick = () => downloadModel(kind, m.id);
+    box.appendChild(btn);
+  }
+  if (m.id === choice[kind]) {
+    box.insertAdjacentHTML("beforeend", `<span class="in-use">✓ In use</span>`);
+  } else {
+    const use = document.createElement("button");
+    use.type = "button"; use.className = "primary small";
+    use.textContent = "Use";
+    use.title = m.installed ? "Use this model" : "Use this model (downloads automatically the first time)";
+    use.onclick = () => {
+      choice[kind] = m.id;
+      saveSettings({ [kind === "whisper" ? "whisper_model" : "llm_model"]: m.id });
+      renderModels();
+    };
+    box.appendChild(use);
+  }
+}
+
+const progressHtml = m => m.download.status === "downloading"
+  ? `<div><div class="dl-msg">${esc(m.download.message)}</div><div class="mini-bar"><div style="width:${((m.download.progress || 0) * 100).toFixed(0)}%"></div></div></div>`
+  : m.download.status === "error" && !m.installed ? `<div class="dl-msg error">${esc(m.download.message)}</div>` : "";
+
+function renderModels() {
+  $("chosenWhisper").textContent = modelLabel("whisper");
+  $("chosenLlm").textContent = modelLabel("llm");
+  const sys = catalog.system;
+  const installed = kind => catalog[kind].filter(m => m.installed).length;
+  $("countWhisper").textContent = `${installed("whisper")} / ${catalog.whisper.length}`;
+  $("countLlm").textContent = catalog.ollama ? `${installed("llm")} / ${catalog.llm.length}` : "offline";
+
+  $("sysInfo").innerHTML = `
+    <div class="stat"><small>Free RAM</small><b>${fmtBytes(sys.ram_available)}</b><span>of ${fmtBytes(sys.ram_total)} total</span></div>
+    <div class="stat"><small>Free disk</small><b>${fmtBytes(sys.disk_free)}</b><span>in your home folder</span></div>
+    <div class="stat"><small>CPU cores</small><b>${sys.cpus ?? "—"}</b><span>no GPU needed</span></div>
+    <div class="stat"><small>Ollama</small><b class="${catalog.ollama ? "fit-yes" : "fit-no"}">${catalog.ollama ? "Running" : "Not running"}</b>
+      <span>${catalog.ollama ? "v" + esc(sys.ollama_version || "?") : "start with ollama serve"}</span></div>`;
+
+  for (const tab of document.querySelectorAll(".tab")) tab.setAttribute("aria-selected", tab.dataset.tab === activeTab);
+  const kind = activeTab;
+  $("tabIntro").innerHTML = kind === "whisper"
+    ? `<div><b>Speech to text</b><p>Turns the uploaded audio or video into text. Runs on your CPU with
+         faster-whisper v${esc(sys.whisper_version)}. Models are stored in <code>${esc(sys.whisper_cache)}</code>.
+         Bigger models are more accurate, especially for Hindi/Urdu, but slower. "English only" models can't transcribe other languages.</p></div>`
+    : `<div><b>Meeting minutes</b><p>Reads the finished transcript and writes minutes of meeting, always in English.
+         Runs through Ollama at <code>${esc(sys.ollama_url)}</code>. For Hindi/Urdu transcripts pick a multilingual model.
+         Longer transcripts need more RAM for context.</p></div>`;
+  if (kind === "llm" && !catalog.ollama)
+    $("tabIntro").insertAdjacentHTML("beforeend",
+      `<div class="warn">Ollama is not running, so these models can't be checked or downloaded. Start it with <code>ollama serve</code>, then press Check &amp; refresh.</div>`);
+
+  // Recommended cards
+  const grid = $("modelGrid");
+  grid.innerHTML = "";
+  for (const m of catalog[kind].filter(m => m.recommended)) {
+    const [fitText, fitCls] = fit(m);
+    const card = document.createElement("article");
+    card.className = "model" + (m.id === choice[kind] ? " sel" : "");
+    card.innerHTML = `
+      <div class="m-head">
+        <div><div class="t">${esc(m.label)}</div><div class="id">${esc(m.id)}</div>
+          ${m.id === catalog["default_" + kind] ? `<div class="tags"><span class="badge dl">Default · lightest</span></div>` : ""}</div>
+        ${badge(m)}
+      </div>
+      <p class="good"><b>Good for:</b> ${esc(m.good_for)}</p>
+      <dl class="specs">
+        <div><dt>Download</dt><dd>${m.bytes ? fmtBytes(m.bytes) : "—"}</dd></div>
+        <div><dt>On disk</dt><dd>${m.installed ? fmtBytes(m.disk) : "0 MB"}</dd></div>
+        <div><dt>RAM</dt><dd>${m.ram_gb ? "~" + m.ram_gb + " GB" : "—"}</dd></div>
+        <div><dt>Speed</dt><dd>${esc(m.speed || "—")}</dd></div>
+        <div><dt>Quality</dt><dd>${esc(m.quality || "—")}</dd></div>
+        <div><dt>Fits PC</dt><dd class="${fitCls}">${fitText}</dd></div>
+      </dl>
+      ${progressHtml(m)}
+      <div class="m-foot"></div>`;
+    modelActions(kind, m, card.querySelector(".m-foot"));
+    grid.appendChild(card);
+  }
+
+  // Full library with search + filters
+  for (const c of document.querySelectorAll(".fchip")) c.classList.toggle("on", c.dataset.f === libFilter);
+  const q = $("libSearch").value.trim().toLowerCase();
+  const all = catalog[kind];
+  const rows = all.filter(m => {
+    if (q && ![m.label, m.id, m.good_for, m.langs].join(" ").toLowerCase().includes(q)) return false;
+    if (libFilter === "installed") return m.installed;
+    if (libFilter === "fits") return fit(m)[0] === "Yes";
+    if (libFilter === "multi") return m.langs === "Multilingual";
+    if (libFilter === "en") return m.langs !== "Multilingual";
+    return true;
+  });
+  $("libCount").textContent = rows.length === all.length ? `${all.length} models` : `${rows.length} of ${all.length}`;
+  const lib = $("libList");
+  lib.innerHTML = `<div class="lrow lhead"><div>Model</div><div>Download</div><div>RAM</div><div>Speed</div>
+                   <div>Quality</div><div>Language</div><div>Fits PC</div><div style="text-align:right">Status</div></div>`;
+  if (!rows.length) lib.insertAdjacentHTML("beforeend", `<div class="lib-empty">No models match these filters.</div>`);
+  for (const m of rows) {
+    const [fitText, fitCls] = fit(m);
+    const tags = [m.recommended ? `<span class="badge dl">Recommended</span>` : "",
+                  m.extra ? `<span class="badge no">Found on this PC</span>` : ""].join("");
+    const row = document.createElement("div");
+    row.className = "lrow" + (m.id === choice[kind] ? " sel" : "");
+    row.innerHTML = `
+      <div class="l-name"><b>${esc(m.label)}</b>${tags ? `<span class="l-tags">${tags}</span>` : ""}
+        <div class="id">${esc(m.id)}</div><div class="l-good">${esc(m.good_for)}</div>${progressHtml(m)}</div>
+      <div class="l-spec"><small>Download</small>${m.bytes ? fmtBytes(m.bytes) : "—"}</div>
+      <div class="l-spec"><small>RAM</small>${m.ram_gb ? "~" + m.ram_gb + " GB" : "—"}</div>
+      <div class="l-spec"><small>Speed</small>${esc(m.speed || "—")}</div>
+      <div class="l-spec"><small>Quality</small>${esc(m.quality || "—")}</div>
+      <div class="l-spec"><small>Language</small>${esc(m.langs || "—")}</div>
+      <div class="l-spec"><small>Fits PC</small><span class="${fitCls}">${fitText}</span></div>
+      <div class="l-act">${badge(m)}<div class="l-btns"></div></div>`;
+    modelActions(kind, m, row.querySelector(".l-btns"));
+    lib.appendChild(row);
+  }
+}
+
+async function downloadModel(kind, id) {
+  try { await api("/api/models/download", "POST", { kind, id }); } catch (e) { alert(e.message); }
+  loadModels();
+}
+
+function showSettings(show) {
+  $("settingsView").classList.toggle("hidden", !show);
+  document.body.classList.toggle("modal-open", show);
+  $("settingsBtn").classList.toggle("active", show);
+  if (show) { $("settingsView").querySelector(".set-panel").scrollTop = 0; loadModels(); }
+}
+const settingsOpen = () => !$("settingsView").classList.contains("hidden");
+$("settingsBtn").onclick = () => showSettings(!settingsOpen());
+$("changeModels").onclick = () => showSettings(true);
+$("closeSettings").onclick = () => showSettings(false);
+$("settingsView").onclick = e => { if (e.target === $("settingsView")) showSettings(false); };  // click on the blurred page
+document.addEventListener("keydown", e => { if (e.key === "Escape" && settingsOpen()) showSettings(false); });
+$("refreshModels").onclick = loadModels;
+$("libSearch").oninput = () => catalog && renderModels();
+for (const c of document.querySelectorAll(".fchip")) {
+  c.onclick = () => { libFilter = c.dataset.f; if (catalog) renderModels(); };
+}
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.onclick = () => { activeTab = tab.dataset.tab; if (catalog) renderModels(); };
+}
+
+/* ---------- tasks menu (header) ---------- */
+const TASK_ICONS = {
+  transcribe: ICON_AUDIO,
+  minutes: ICON_DOC,
+  download: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>`,
+  upload: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9M7 14l5-5 5 5M5 3h14"/></svg>`,
+};
+const TASK_TYPES = { transcribe: "Transcription", minutes: "Meeting minutes", download: "Model download", upload: "Upload" };
+const TASK_STATUS = { queued: "Queued", loading: "Loading", transcribing: "Transcribing", generating: "Writing",
+                      downloading: "Downloading", uploading: "Uploading", done: "Done", error: "Failed",
+                      cancelled: "Stopped" };
+let tasks = [];
+
+const ago = secs => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - secs));
+  return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
+};
+
+async function refreshTasks() {
+  let list = [];
+  try { list = await (await fetch("/api/tasks")).json(); } catch { return; }
+  if (!Array.isArray(list)) return;
+  if (currentUpload)  // uploads happen in this browser before the server knows about the job
+    list.unshift({ id: "upload", type: "upload", title: currentUpload.name, detail: "Sending file to the server",
+                   status: "uploading", message: "", progress: currentUpload.frac, active: true,
+                   cancellable: true, stopping: false, started: currentUpload.started });
+  tasks = list;
+  renderTasks();
+}
+
+function renderTasks() {
+  updateGenButtons();  // the task list is what tells us a minutes job is running
+  const active = tasks.filter(t => t.active), recent = tasks.filter(t => !t.active);
+  const running = active.filter(t => t.status !== "queued").length, queued = active.length - running;
+  $("tasksBtn").classList.toggle("busy", active.length > 0);
+  $("tasksSpin").classList.toggle("hidden", !running);
+  $("tasksIcon").classList.toggle("hidden", !!running);
+  $("tasksLabel").textContent = !active.length ? "Tasks"
+    : [running && `${running} running`, queued && `${queued} queued`].filter(Boolean).join(" · ");
+  $("tasksSummary").textContent = active.length ? `${active.length} active` : "idle";
+  $("clearTasks").classList.toggle("hidden", !recent.length);
+
+  const box = $("tasksList");
+  box.innerHTML = "";
+  if (!tasks.length) {
+    box.innerHTML = `<div class="tp-empty">Nothing running.<br>Transcriptions, meeting minutes and model downloads show up here.</div>`;
+    return;
+  }
+  const group = (label, items) => {
+    if (!items.length) return;
+    box.insertAdjacentHTML("beforeend", `<div class="tp-group">${label}</div>`);
+    for (const t of items) box.appendChild(taskRow(t));
+  };
+  group(`Running &amp; queued (${active.length})`, active);
+  group("Recent", recent);
+}
+
+function taskRow(t) {
+  const el = document.createElement("div");
+  el.className = "task" + (t.active ? "" : " fin");
+  const label = t.stopping ? "Stopping..." : TASK_STATUS[t.status] || t.status;
+  const when = t.active ? `started ${ago(t.started)}` : t.finished ? ago(t.finished) : "";
+  const determinate = t.progress > 0 && ["transcribing", "downloading", "uploading"].includes(t.status);
+  el.innerHTML = `
+    <div class="t-ic">${TASK_ICONS[t.type] || TASK_ICONS.transcribe}</div>
+    <div>
+      <div class="t-top"><span class="t-title"></span><span class="pill ${t.stopping ? "cancelled" : t.status}">${esc(label)}</span></div>
+      <div class="t-sub"></div>
+      ${t.active ? `<div class="bar ${determinate ? "" : "indeterminate"}"><div style="${determinate ? `width:${(t.progress * 100).toFixed(1)}%` : ""}"></div></div>` : ""}
+      ${t.message ? `<div class="t-msg"></div>` : ""}
+    </div>
+    <div class="t-act"></div>`;
+  const title = el.querySelector(".t-title");
+  title.textContent = t.title;
+  title.title = t.title;
+  if (t.record) {
+    title.classList.add("link");
+    title.onclick = () => { toggleTasks(false); openRecord(t.record); };
+  }
+  el.querySelector(".t-sub").textContent = [TASK_TYPES[t.type], t.detail, when].filter(Boolean).join(" · ");
+  if (t.message) el.querySelector(".t-msg").textContent = t.message;
+
+  const act = el.querySelector(".t-act");
+  if (t.active) {
+    const stop = document.createElement("button");
+    stop.type = "button"; stop.className = "stop-btn";
+    stop.textContent = t.stopping ? "Stopping..." : "Stop";
+    stop.disabled = t.stopping || !t.cancellable;
+    stop.title = t.cancellable ? "Stop this task" : "This download can't be stopped once started";
+    stop.onclick = () => stopTask(t.id);
+    act.appendChild(stop);
+  } else if (t.output) {
+    const open = document.createElement("button");
+    open.type = "button"; open.className = "ghost";
+    open.textContent = "Open";
+    open.onclick = () => { toggleTasks(false); openRecord(t.output.record, { kind: t.output.kind, version: t.output.version }); };
+    act.appendChild(open);
+  }
+  return el;
+}
+
+async function stopTask(id) {
+  if (id === "upload") { currentXhr?.abort(); return; }
+  try { await api(`/api/tasks/${encodeURIComponent(id)}/cancel`, "POST"); }
+  catch (e) { if (e.status !== 409) alert(e.message); }
+  refreshTasks();
+  if (id.startsWith("dl:") && catalog) loadModels();
+}
+
+function toggleTasks(show) {
+  $("tasksPop").classList.toggle("hidden", !show);
+  $("tasksBtn").setAttribute("aria-expanded", show);
+  if (show) refreshTasks();
+}
+$("tasksBtn").onclick = () => toggleTasks($("tasksPop").classList.contains("hidden"));
+$("clearTasks").onclick = async () => { await fetch("/api/tasks/clear", { method: "POST" }); refreshTasks(); };
+document.addEventListener("click", e => { if (!$("tasksWrap").contains(e.target)) toggleTasks(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") toggleTasks(false); });
+
+/* ---------- start ---------- */
+(async () => {
+  await loadSettings();
+  loadModels();
+  await loadRecords();
+  newFile();
+  refreshTasks();
+  // same 5-second rhythm as job progress: keeps the task menu and "Working" badges current
+  setInterval(() => { refreshTasks(); loadRecords(); }, UPDATE_MS);
+  if (location.hash === "#settings") showSettings(true);
+})();
+</script>
+</body>
+</html>
